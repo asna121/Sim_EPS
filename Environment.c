@@ -32,8 +32,22 @@
 FATFS USBDISKFatFs;           /* File system object for USB disk logical drive */
 uint8_t USBDISKPath[4];          /* USB Host logical drive path */
 
-/*File in the disk*/
-FIL MyFile;                   /* File object */
+/**File in the disk**/
+
+/* EPS File object*/
+FIL MyFile_EPS;
+
+/* ADCS File object*/
+//FIL MyFile_ADCS_X;
+//FIL MyFile_ADCS_Y;
+//FIL MyFile_ADCS_Z;
+
+/* IFB File object*/
+//FIL MyFile_IFB_5V_C;
+//FIL MyFile_IFB_3_3V_C;
+//FIL MyFile_IFB_INMS_T;
+//FIL MyFile_IFB_IFB_T;
+
 
 USBH_HandleTypeDef hUSB_Host;	/* USB Host handle */
 
@@ -45,40 +59,35 @@ typedef enum {
 
 MSC_ApplicationTypeDef Appli_state = APPLICATION_IDLE;
 
-//xQueueHandle AppliEvent;
-
-/*Queue with Corresponding File*/
+/*Queue handler with Corresponding Subsystem*/
 xQueueHandle xQueue_EPS;
-    
-/* UART handler declaration */
-extern UART_HandleTypeDef UartHandle;
-extern xSemaphoreHandle uart_lock;
+//xQueueHandle xQueue_ADCS;
+//xQueueHandle xQueue_IFB;
 
-
-/* Private function prototypes -----------------------------------------------*/
-static void Check_Data_Queue(void *argument);
+/* Private function prototypes ----------------------------------------------*/
+static void Update_Data_in_Period(void *argument);
 static void StartThread(void *argument);
 static void USBH_UserProcess(USBH_HandleTypeDef *phost, uint8_t id);
 static void MSC_Application(void);
 
+/* import function-----------------------------------------------------------*/
 
-/* import function*/
+/* import variable-----------------------------------------------------------*/
+/* UART handler declaration */
 
+extern xSemaphoreHandle uart_lock;
+
+/**
+  * @brief  invoke environment(USB Disk) 
+  * @param  None
+  * @retval None
+  */
 
 void submain_Environment(void)
 {
   
 	/* USB application task */
-	xTaskCreate(StartThread,"USER_Thread", 8 * configMINIMAL_STACK_SIZE, NULL, 0,NULL);
-    
-                /*Create Queue for each subsystem*/
-            //xQueue_EPS = xQueueCreate( Queue_EPS_Size , sizeof(xData) ); //for EPS
-    
-            // if(xQueue_EPS!=NULL)
-            // prvNewPrintString(" 5555555555 ",12);
-    
-            /* Check All Data Queue in Enivronment*/
-            //xTaskCreate(Check_Data_Queue,"Data Queue Check", configMINIMAL_STACK_SIZE, NULL, 1,NULL); //Caution
+	xTaskCreate(StartThread,"USER_Thread", 16 * configMINIMAL_STACK_SIZE, NULL, 0,NULL);
 
 }
 
@@ -90,11 +99,6 @@ void submain_Environment(void)
 
 static void StartThread(void *argument)
 {
-    
-    
-    //prvNewPrintString(" #@RE@# ",12);
-    //vTaskDelay(1);
-    //prvNewPrintString(" #@OK@# ",12);
     if(FATFS_LinkDriver(&USBH_Driver, (char *)USBDISKPath) == 0)
 	{
 
@@ -186,27 +190,37 @@ static void MSC_Application(void)
     }
     else
     {
-    /* Create and Open a new text file object with write access */
-    //if(f_open(&MyFile, "STM32.TXT", FA_CREATE_ALWAYS | FA_WRITE) != FR_OK)
-        
+
         /* Open the text file object with read access */
-        if(f_open(&MyFile, "EPS_16s", FA_READ) != FR_OK)
+        if(f_open(&MyFile_EPS, "EPS_16s", FA_READ) != FR_OK)
         {
             /* 'STM32.TXT' file Open for read Error */
             Error_Handler();
         }
         else
+            prvNewPrintString(" EPS_16s OK! ",13);
+         
+
+        Appli_state = APPLICATION_RUNNING;
+
+        /* Once all the file are available, Create corresponding queue for these data package */
+        if(xQueue_EPS==NULL)
+        //if(xQueue_ADCS==NULL)
+        //if(xQueue_IFB==NULL)
         {
-            Appli_state = APPLICATION_RUNNING;
-            
             /*Create Queue for each subsystem*/
-            xQueue_EPS = xQueueCreate( Queue_EPS_Size , sizeof(xData) ); //for EPS
-    
-            // if(xQueue_EPS!=NULL)
-            // prvNewPrintString(" 5555555555 ",12);
-    
+            
+            xQueue_EPS = xQueueCreate( Queue_Number , sizeof(xData) ); //for EPS
+            //xQueue_ADCS = xQueueCreate( Queue_Number , sizeof(xData) ); //for ADCS
+            //xQueue_IFB = xQueueCreate( Queue_Number , sizeof(xData) ); //for IFB
+        }
+
+        
+        /* If Queue is opened correctly, then "Update Data" task shall be created */
+        if(Appli_state == APPLICATION_RUNNING)
+        {
             /* Check All Data Queue in Enivronment*/
-            xTaskCreate(Check_Data_Queue,"Data Queue Check", configMINIMAL_STACK_SIZE, NULL, 1,NULL); //Caution
+            xTaskCreate(Update_Data_in_Period,"Update Data in Period", configMINIMAL_STACK_SIZE, NULL, 1,NULL); //Caution
         }
     
     }
@@ -215,94 +229,135 @@ static void MSC_Application(void)
     //FATFS_UnLinkDriver((char *)USBDISKPath);
 }
 
-
-static void Check_Data_Queue(void *argument)
+static void readfile_in_disk(FIL* myfile, uint8_t* temp_rtext, uint8_t size_of_item,  uint32_t* temp_byteread)
 {
-    const uint8_t *output_test = "putin\n";
-    //uint16_t temp[17] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17};
-    uint8_t i = 0;
+    /* Read data from the text file */
+    f_read(myfile, temp_rtext, size_of_item*5, (void *)temp_byteread);
+    
+    if(((*temp_byteread)/size_of_item)!=5)
+    {
+     //prvNewPrintString("\n",1);
+    #ifdef repeat
+    f_rewind(myfile);
+    #endif
+    }
+
+}
+
+/**
+  * @brief  Put read data into corresponding queue with corresponding period
+  * @param  argument: no used
+  * @retval None
+  */
+static void Update_Data_in_Period(void *argument)
+{
     portTickType xLastWakeTime;
 
     portBASE_TYPE xStatus;
     
     
-    uint32_t bytesread;                     /* File read counts */
+    uint32_t bytesread_1;                     /* File read counts */
+    //uint32_t bytesread_2;                     /* File read counts */
+    //uint32_t bytesread_3;                     /* File read counts */
+    //uint32_t bytesread_4;                     /* File read counts */     
     
-    xData test1;
+    // Counter
+    uint8_t i = 0;
+    
+    uint8_t rtext_1[50];                                   /* File read buffer */   
+    //uint8_t rtext_2[50];                                   /* File read buffer */  
+    //uint8_t rtext_3[50];                                   /* File read buffer */     
+    //uint8_t rtext_4[50];                                   /* File read buffer */ 
+    
+    xData temp_xData;
+    xData_EPS_Package_1* temp_package = NULL;
+    //xData_ADCS_Package_1* temp_package = NULL;
+    //xData_IFB_Package_1* temp_package = NULL;
     
     /*for test*/
-    uint16_t* temp_int = NULL;
+    //uint16_t temp[17] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17};
+    //uint16_t* temp_int = NULL;
     
     //uint16_t* Pri_int = NULL;
-
+    
+    /*for print screen*/
 	uint8_t buff[6] ={0,0,0,0,0,0};
+
     
-    uint8_t rtext[100];                                   /* File read buffer */
-    
-	  
 	xLastWakeTime = xTaskGetTickCount();
-    
-    prvNewPrintString("Check Data Queue\n",18);
-    
-    Appli_state = APPLICATION_RUNNING;
     
     for(;;)
     {
+        /* data update period */
+        vTaskDelayUntil( &xLastWakeTime, 1000 );
+        
         if(Appli_state == APPLICATION_RUNNING)
         {
-           if(uxQueueMessagesWaiting(xQueue_EPS) <= (Queue_EPS_Size-5))
+            
+            /* if rtext is empty*/
+            if(i==0)
             {
-                 /* Read data from the text file */
-                f_read(&MyFile, rtext, sizeof(type_envEPS_Battery_Voltage)*5, (void *)&bytesread);   
+                /* Read data from the text file */
+                readfile_in_disk(&MyFile_EPS, rtext_1, size_fileEPS_Battery_Voltage, &bytesread_1);
+                //readfile_in_disk(&MyFile_IFB_3_3V_C, rtext_2, size_fileIFB_3_3V_Current, &bytesread_2);
+                //readfile_in_disk(&MyFile_IFB_INMS_T, rtext_3, size_fileIFB_INMS_Temp, &bytesread_3);
+                //readfile_in_disk(&MyFile_IFB_IFB_T, rtext_4, size_fileIFB_IFB_Temp, &bytesread_4);             
+            }
             
-                //prvNewPrintString("Not Enough ",11);
-                
-                //sprintf (buff, "%d", bytesread/sizeof(type_envEPS_Battery_Voltage));
-                //prvNewPrintString(buff,6);
-                
-                for(i=0;i<(bytesread/sizeof(type_envEPS_Battery_Voltage));i++)
-                {
-                    //創造空間 register相應的空間大小
-                    temp_int = (type_envEPS_Battery_Voltage *)malloc(sizeof( type_envEPS_Battery_Voltage ));
+            /*創造空間 大小為次系統的Package*/
+            temp_package = (xData_EPS_Package_1 *)pvPortMalloc(sizeof( xData_EPS_Package_1 ));
+            //temp_package = (xData_IFB_Package_1 *)pvPortMalloc(sizeof( xData_IFB_Package_1 ));
             
-                    //給值
-                    /* for the test */
-                    //*temp_int = temp[i++%17];
-                    *temp_int = ((rtext[i*2] & 0xff) << 8) | (rtext[i*2+1] & 0xff);
-                    
-                    sprintf (buff, "%d", *temp_int);
-                    prvNewPrintString(buff,6);
+            /*給值*/
+            (*temp_package).envEPS_Battery_Voltage = ((rtext_1[i*2] & 0xff) << 8) | (rtext_1[i*2+1] & 0xff);
             
-                    //複製到struct中的成員
-                    test1.refRegister = ref_envEPS_Battery_Voltage;
-                    test1.ptrRegister = (void *)temp_int;
+            //(*temp_package).envIFB_5V_Current = ((rtext_1[i*2] & 0xff) << 8) | (rtext_1[i*2+1] & 0xff);
+            //(*temp_package).envIFB_3_3V_Current = ((rtext_2[i*2] & 0xff) << 8) | (rtext_2[i*2+1] & 0xff);
+            //(*temp_package).envIFB_INMS_Temp = ((rtext_3[i*2] & 0xff) << 8) | (rtext_3[i*2+1] & 0xff);
+            //(*temp_package).envIFB_IFB_Temp = ((rtext_3[i*2] & 0xff) << 8) | (rtext_3[i*2+1] & 0xff);
+            
+            /*複製到struct中的成員*/
+            temp_xData.refPackage = ref_envEPS_Package_1;
+            temp_xData.ptrPackage = (void *)temp_package;
         
-                    //buffer, sizeof(long)
-                    xStatus = xQueueSendToBack(xQueue_EPS, &test1 ,0);
-
-                    /* Print to Screen*/
-
-                }
-                #ifdef repeat
-                if((bytesread/sizeof(type_envEPS_Battery_Voltage))!=5)
-                {
-                    prvNewPrintString("\n",1);
-                    
-                    f_rewind(&MyFile);
-                }
-                #endif
-            } 
+            //buffer, sizeof(long)
+            xStatus = xQueueSendToBack(xQueue_EPS, &temp_xData ,0);
             
+            /**  this area can be used for another subsystem's package which has the same period **/
+            /*創造空間 大小為次系統的Package*/
+            //temp_package = (xData_ADCS_Package_1 *)pvPortMalloc(sizeof( xData_ADCS_Package_1 ));
+            
+            /*給值*/
+            //(*temp_package).envADCS_Estimated_Angular_X = ((rtext_1[i*2] & 0xff) << 8) | (rtext_1[i*2+1] & 0xff);
+            //(*temp_package).envADCS_Estimated_Angular_Y = ((rtext_2[i*2] & 0xff) << 8) | (rtext_2[i*2+1] & 0xff);
+            //(*temp_package).envADCS_Estimated_Angular_Z = ((rtext_3[i*2] & 0xff) << 8) | (rtext_3[i*2+1] & 0xff);
+            
+            /*複製到struct中的成員*/
+            //temp_xData.refPackage = ref_envADCS_Package_1;
+            //temp_xData.ptrPackage = (void *)temp_package;
+        
+            //buffer, sizeof(long)
+            //xStatus = xQueueSendToBack(xQueue_ADCS, &temp_xData ,0);
+                       
+            /* Print to Screen*/
+            //sprintf (buff, "%04X", (*temp_package).envADCS_Estimated_Angular_Z);
+            //prvNewPrintString(buff,6);
+ 
         }
         else
         { 
             /* Close the open text file */
-            f_close(&MyFile);
+            f_close(&MyFile_EPS);
+            //f_close(&MyFile_IFB_3_3V_C);
+            //f_close(&MyFile_IFB_INMS_T);
+            //f_close(&MyFile_IFB_IFB_T);
         }
-        //if(xStatus==errQUEUE_FULL)prvNewPrintString(" QUEUE FULL ",12);
         
-        //prvNewPrintString(output_test,6);
-        vTaskDelayUntil( &xLastWakeTime, 250 );        
+        /*read index increase*/
+        i=(++i)%5;
+        
     }
     
 }
+
+

@@ -66,16 +66,19 @@
  #define I2Cx_2_ER_Priority										10
 
 /* Definition for I2Cx's ADDRESS */
-
+//EPS
 #define I2C_2_ADDRESS        0x04
- 
-#endif /* __PERIPHERAL_H */
- 
+//IFB
+//#define I2C_2_ADDRESS        0xDA
  /*Exported variable -------------------------------------------------------  */
- 
+
+extern I2C_HandleTypeDef I2CxHandle_2;
+extern UART_HandleTypeDef UartHandle;
+
 extern uint8_t priI2Cx_2_NewCommand;
- 
- 
 /* Exported functions ------------------------------------------------------- */
 
 extern void Init_Peripheral(void);
+
+
+#endif /* __PERIPHERAL_H */

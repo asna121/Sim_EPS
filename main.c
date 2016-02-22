@@ -46,8 +46,6 @@
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
 
-extern I2C_HandleTypeDef I2CxHandle_2;
-
 static void SystemClock_Config(void);
 //static void Flush_Buffer(uint8_t* pBuffer, uint16_t BufferLength);
 
@@ -85,6 +83,8 @@ int main(void)
   
     /* Thread I2C 2*/
   submain_EPS(&I2CxHandle_2);
+  //submain_ADCS(&I2CxHandle_2);
+  //submain_IFB(&I2CxHandle_2);
 	
   /* Start scheduler */
   vTaskStartScheduler();
